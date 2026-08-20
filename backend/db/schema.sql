@@ -31,11 +31,15 @@ CREATE TABLE IF NOT EXISTS complaints (
     photo_url     TEXT,
     priority      TEXT NOT NULL DEFAULT 'LOW' CHECK (priority IN ('LOW','MEDIUM','HIGH')),
     status        TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','IN_PROGRESS','RESOLVED')),
+    assigned_worker_name  TEXT,
+    assigned_worker_phone TEXT,
+    scheduled_visit_time  TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_complaints_status   ON complaints(status);
+CREATE INDEX IF NOT EXISTS idx_complaints_status_created ON complaints(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_complaints_resident ON complaints(resident_id);
 CREATE INDEX IF NOT EXISTS idx_complaints_created  ON complaints(created_at);
 
@@ -47,6 +51,8 @@ CREATE TABLE IF NOT EXISTS complaint_history (
     new_status        TEXT,
     previous_priority TEXT,
     new_priority      TEXT,
+    assigned_worker_name  TEXT,
+    assigned_worker_phone TEXT,
     note              TEXT,
     updated_by        INTEGER NOT NULL REFERENCES users(id),
     created_at        TEXT NOT NULL DEFAULT (datetime('now'))
