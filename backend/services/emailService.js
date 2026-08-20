@@ -74,12 +74,17 @@ function notifyImportantNotice(notice, residents) {
  * Notifies a resident their complaint's status changed.
  */
 function notifyComplaintStatusChange(resident, complaint, previousStatus) {
+  const assignment = complaint.assigned_worker_name
+    ? `\n\nService personnel: ${complaint.assigned_worker_name}` +
+      `\nPhone: ${complaint.assigned_worker_phone || 'Not provided'}` +
+      `\nScheduled visit: ${complaint.scheduled_visit_time ? new Date(complaint.scheduled_visit_time).toLocaleString() : 'Not scheduled'}`
+    : '';
   send({
     to: resident.email,
     subject: `[Society Hub] Complaint #${complaint.id} updated`,
     body:
       `Your complaint "${complaint.description.slice(0, 60)}" moved from ` +
-      `${previousStatus} to ${complaint.status}.`,
+      `${previousStatus} to ${complaint.status}.${assignment}`,
   }); // fire-and-forget, no await
 }
 

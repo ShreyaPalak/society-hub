@@ -2,6 +2,7 @@ const db = require('../config/db');
 const ApiError = require('../utils/ApiError');
 const { getOverdueThresholdDays, overdueSqlFragment } = require('../services/overdueService');
 const { notifyComplaintStatusChange } = require('../services/emailService');
+const { emitComplaintCreated, emitComplaintUpdated } = require('../services/realtime');
 
 const CATEGORIES = ['Plumbing', 'Electrical', 'Elevator', 'Common Area', 'Security', 'Housekeeping', 'Other'];
 const STATUSES = ['OPEN', 'IN_PROGRESS', 'RESOLVED'];
@@ -40,6 +41,7 @@ async function create(req, res) {
   const photoUrl = req.file ? `/uploads/${req.file.filename}` : null;
   const complaint = createComplaint(req.user.id, category, description.trim(), photoUrl);
   res.status(201).json({ complaint });
+  emitComplaintCreated(complaint);
 }
 
 // ---------------------------------------------------------------------
@@ -147,38 +149,58 @@ function getOne(req, res) {
 // complaint_history insert commit together or not at all, preventing the
 // "silent overwrite with no audit row" failure mode.
 // ---------------------------------------------------------------------
-const applyStatusChange = db.transaction((complaintId, newStatus, adminId, note) => {
+const applyStatusChange = db.transaction((complaintId, newStatus, adminId, note, workerName, workerPhone, scheduledVisitTime) => {
   const complaint = db.prepare('SELECT * FROM complaints WHERE id = ?').get(complaintId);
   if (!complaint) throw new ApiError(404, 'Complaint not found.');
 
   const previousStatus = complaint.status;
+  const effectiveWorkerName = workerName === undefined ? complaint.assigned_worker_name : workerName || null;
+  const effectiveWorkerPhone = workerPhone === undefined ? complaint.assigned_worker_phone : workerPhone || null;
+  const effectiveVisitTime = scheduledVisitTime === undefined ? complaint.scheduled_visit_time : scheduledVisitTime || null;
 
-  db.prepare(`UPDATE complaints SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(
+  db.prepare(`UPDATE complaints
+              SET status = ?, assigned_worker_name = ?, assigned_worker_phone = ?,
+                  scheduled_visit_time = ?, updated_at = datetime('now')
+              WHERE id = ?`).run(
     newStatus,
+    effectiveWorkerName,
+    effectiveWorkerPhone,
+    effectiveVisitTime,
     complaintId
   );
 
   db.prepare(
     `INSERT INTO complaint_history
-       (complaint_id, action_type, previous_status, new_status, updated_by, note)
-     VALUES (?, 'STATUS_CHANGE', ?, ?, ?, ?)`
-  ).run(complaintId, previousStatus, newStatus, adminId, note || null);
+       (complaint_id, action_type, previous_status, new_status, assigned_worker_name,
+        assigned_worker_phone, updated_by, note)
+      VALUES (?, 'STATUS_CHANGE', ?, ?, ?, ?, ?, ?)`
+    ).run(complaintId, previousStatus, newStatus, effectiveWorkerName, effectiveWorkerPhone, adminId, note || null);
 
   return { previousStatus, complaint: db.prepare('SELECT * FROM complaints WHERE id = ?').get(complaintId) };
 });
 
 async function updateStatus(req, res) {
-  const { status, note } = req.body;
+  const { status, note, assigned_worker_name, assigned_worker_phone, scheduled_visit_time } = req.body;
   if (!STATUSES.includes(status)) {
     throw new ApiError(400, `status must be one of: ${STATUSES.join(', ')}`);
   }
 
-  const { previousStatus, complaint } = applyStatusChange(req.params.id, status, req.user.id, note);
+  if (status === 'IN_PROGRESS' && (!assigned_worker_name || !assigned_worker_phone || !scheduled_visit_time)) {
+    throw new ApiError(400, 'Worker name, phone and scheduled visit time are required for IN_PROGRESS.');
+  }
+  if (assigned_worker_name && String(assigned_worker_name).length > 100) throw new ApiError(400, 'Worker name is too long.');
+  if (assigned_worker_phone && String(assigned_worker_phone).length > 20) throw new ApiError(400, 'Worker phone is too long.');
+  if (scheduled_visit_time && Number.isNaN(Date.parse(scheduled_visit_time))) throw new ApiError(400, 'scheduled_visit_time must be a valid date.');
+
+  const { previousStatus, complaint } = applyStatusChange(
+    req.params.id, status, req.user.id, note, assigned_worker_name, assigned_worker_phone, scheduled_visit_time
+  );
 
   const resident = db.prepare('SELECT * FROM users WHERE id = ?').get(complaint.resident_id);
   if (resident && previousStatus !== status) {
     // Fire-and-forget: response below is not blocked by mail delivery.
     notifyComplaintStatusChange(resident, complaint, previousStatus);
+    emitComplaintUpdated(complaint);
   }
 
   res.json({ complaint });
