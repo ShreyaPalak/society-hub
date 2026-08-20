@@ -1,4 +1,4 @@
-const API_BASE = window.SOCIETY_HUB_API_BASE || 'http://localhost:4000/api';
+const API_BASE = window.SOCIETY_HUB_API_BASE || 'http://localhost:4000/api/v1';
 
 function getToken() {
   return localStorage.getItem('sh_token');
@@ -72,7 +72,7 @@ const api = {
   myComplaints: (params = {}) => request(`/complaints/mine?${new URLSearchParams(params)}`),
   allComplaints: (params = {}) => request(`/complaints?${new URLSearchParams(params)}`),
   complaintDetail: (id) => request(`/complaints/${id}`),
-  updateStatus: (id, status, note) => request(`/complaints/${id}/status`, { method: 'PATCH', body: { status, note } }),
+  updateStatus: (id, status, note, assignment = {}) => request(`/complaints/${id}/status`, { method: 'PATCH', body: { status, note, ...assignment } }),
   updatePriority: (id, priority) => request(`/complaints/${id}/priority`, { method: 'PATCH', body: { priority } }),
   metrics: () => request('/complaints/metrics'),
 
@@ -83,6 +83,8 @@ const api = {
   // admin settings
   getOverdueThreshold: () => request('/admin/settings/overdue-threshold'),
   setOverdueThreshold: (days) => request('/admin/settings/overdue-threshold', { method: 'PUT', body: { days } }),
+  users: (params = {}) => request(`/admin/users?${new URLSearchParams(params)}`),
+  updateUserRole: (id, role) => request(`/admin/users/${id}/role`, { method: 'PATCH', body: { role } }),
 };
 
 window.ShAPI = { api, getToken, setSession, clearSession, getUser, API_BASE };

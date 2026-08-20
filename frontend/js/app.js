@@ -219,8 +219,8 @@ function TimelineModal({ complaintId, onClose }) {
           </div>
           <p style={{ marginTop: 8 }}>{data.complaint.description}</p>
           {data.complaint.photo_url && (
-            <a href={`${apiBase.replace('/api', '')}${data.complaint.photo_url}`} target="_blank" rel="noreferrer">
-              <img src={`${apiBase.replace('/api', '')}${data.complaint.photo_url}`} alt="attachment" style={{ maxWidth: '100%', borderRadius: 8, marginTop: 8 }} />
+            <a href={`${apiBase.replace(/\/api(?:\/v1)?$/, '')}${data.complaint.photo_url}`} target="_blank" rel="noreferrer">
+              <img src={`${apiBase.replace(/\/api(?:\/v1)?$/, '')}${data.complaint.photo_url}`} alt="attachment" style={{ maxWidth: '100%', borderRadius: 8, marginTop: 8 }} />
             </a>
           )}
 
@@ -241,6 +241,14 @@ function TimelineModal({ complaintId, onClose }) {
                     by {h.actor_name} ({h.actor_role === 'admin' ? 'Admin' : 'Resident'}) &middot; {new Date(h.created_at).toLocaleString()}
                   </div>
                   {h.note && <div className="timeline-note">{h.note}</div>}
+                  {h.new_status === 'IN_PROGRESS' && h.assigned_worker_name && (
+                    <div className="card" style={{ marginTop: 10, padding: 12, background: '#F0FDF4' }}>
+                      <strong>Service Personnel</strong>
+                      <div>{h.assigned_worker_name}</div>
+                      {h.assigned_worker_phone && <a href={`tel:${h.assigned_worker_phone}`}>{h.assigned_worker_phone}</a>}
+                      {data.complaint.scheduled_visit_time && <div className="caption">Visit: {new Date(data.complaint.scheduled_visit_time).toLocaleString()}</div>}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -413,7 +421,7 @@ function ResidentDashboard({ user, toast }) {
               </div>
             </div>
             <div className="cc-right">
-              {c.photo_url && <img className="cc-thumb" src={`${apiBase.replace('/api', '')}${c.photo_url}`} alt="" />}
+              {c.photo_url && <img className="cc-thumb" src={`${apiBase.replace(/\/api(?:\/v1)?$/, '')}${c.photo_url}`} alt="" />}
               <StatusBadge status={c.status} />
             </div>
           </div>
@@ -496,6 +504,8 @@ function AdminDashboard({ user, toast }) {
   const [showNotice, setShowNotice] = useState(false);
   const [timelineId, setTimelineId] = useState(null);
   const [threshold, setThreshold] = useState(null);
+  const [assignment, setAssignment] = useState(null);
+  const [showUsers, setShowUsers] = useState(false);
 
   const loadMetrics = useCallback(() => {
     apiClient.metrics().then(setMetrics).catch((e) => toast(e.message, 'error'));
@@ -510,10 +520,20 @@ function AdminDashboard({ user, toast }) {
   useEffect(() => { loadMetrics(); }, [loadMetrics]);
   useEffect(() => { loadComplaints(); }, [loadComplaints]);
   useEffect(() => { apiClient.getOverdueThreshold().then((r) => setThreshold(r.overdue_threshold_days)).catch(() => {}); }, []);
+  useEffect(() => {
+    if (!window.io || !sessionGetToken()) return undefined;
+    const socket = window.io('http://localhost:4000', { auth: { token: sessionGetToken() } });
+    socket.on('complaint:created', ({ complaint }) => {
+      toast(`New complaint #${complaint.id} received.`, 'info');
+      loadComplaints();
+      loadMetrics();
+    });
+    return () => socket.disconnect();
+  }, [loadComplaints, loadMetrics, toast]);
 
-  async function changeStatus(id, status) {
+  async function changeStatus(id, status, details = {}) {
     try {
-      await apiClient.updateStatus(id, status);
+      await apiClient.updateStatus(id, status, details.note, details);
       toast(`Complaint #${id} marked ${status.replace('_', ' ')}.`, 'success');
       loadComplaints();
       loadMetrics();
@@ -532,10 +552,21 @@ function AdminDashboard({ user, toast }) {
     }
   }
 
+  
+    useEffect(() => {
+      if (!window.io || !sessionGetToken()) return undefined;
+      const socket = window.io('http://localhost:4000', { auth: { token: sessionGetToken() } });
+      socket.on('complaint:created', ({ complaint }) => {
+        toast(`New complaint #${complaint.id} received.`, 'info');
+        loadComplaints();
+        loadMetrics();
+      });
+      return () => socket.disconnect();
+    }, [loadComplaints, loadMetrics, toast]);
   async function saveThreshold(days) {
     try {
       const r = await apiClient.setOverdueThreshold(days);
-      setThreshold(r.overdue_threshold_days);
+        await apiClient.updateStatus(id, status, details.note, details);
       toast(`Overdue threshold updated to ${r.overdue_threshold_days} day(s).`, 'success');
       loadComplaints();
       loadMetrics();
@@ -611,7 +642,9 @@ function AdminDashboard({ user, toast }) {
                     <td className="caption">{new Date(c.created_at).toLocaleDateString()}</td>
                     <td>{c.is_overdue ? <OverdueBadge /> : <StatusBadge status={c.status} />}</td>
                     <td style={{ display: 'flex', gap: 6 }}>
-                      <select value={c.status} onChange={(e) => changeStatus(c.id, e.target.value)}>
+                      <select value={c.status} onChange={(e) => e.target.value === 'IN_PROGRESS'
+                        ? setAssignment({ id: c.id, status: e.target.value })
+                        : changeStatus(c.id, e.target.value)}>
                         {STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
                       </select>
                       <button className="btn btn-ghost btn-sm" onClick={() => setTimelineId(c.id)}>View</button>
@@ -628,8 +661,39 @@ function AdminDashboard({ user, toast }) {
         <NewNoticeModal onClose={() => setShowNotice(false)} onCreated={() => setShowNotice(false)} />
       )}
       {timelineId && <TimelineModal complaintId={timelineId} onClose={() => setTimelineId(null)} />}
+      {assignment && <AssignmentModal assignment={assignment} onClose={() => setAssignment(null)} onSave={(details) => { setAssignment(null); changeStatus(assignment.id, assignment.status, details); }} />}
+      <div className="section">
+        <div className="section-head"><h2>User Management</h2><button className="btn btn-ghost" onClick={() => setShowUsers((value) => !value)}>{showUsers ? 'Hide Users' : 'Manage Users'}</button></div>
+        {showUsers && <UserManagement user={user} toast={toast} />}
+      </div>
     </div>
   );
+}
+
+function AssignmentModal({ assignment, onClose, onSave }) {
+  const [details, setDetails] = useState({ assigned_worker_name: '', assigned_worker_phone: '', scheduled_visit_time: '', note: 'Technician dispatched.' });
+  const update = (key) => (event) => setDetails((value) => ({ ...value, [key]: event.target.value }));
+  return <Modal title={`Assign technician to complaint #${assignment.id}`} onClose={onClose} footer={<button className="btn btn-primary" onClick={() => onSave(details)}>Save Assignment</button>}>
+    <div className="field"><label>Worker Name *</label><input value={details.assigned_worker_name} onChange={update('assigned_worker_name')} /></div>
+    <div className="field"><label>Worker Phone *</label><input value={details.assigned_worker_phone} onChange={update('assigned_worker_phone')} /></div>
+    <div className="field"><label>Scheduled Visit *</label><input type="datetime-local" value={details.scheduled_visit_time} onChange={update('scheduled_visit_time')} /></div>
+    <div className="field"><label>Admin Note</label><textarea value={details.note} onChange={update('note')} /></div>
+  </Modal>;
+}
+
+function UserManagement({ user, toast }) {
+  const [search, setSearch] = useState('');
+  const [users, setUsers] = useState([]);
+  const load = useCallback(() => apiClient.users({ search }).then((response) => setUsers(response.users)).catch((err) => toast(err.message, 'error')), [search, toast]);
+  useEffect(() => { load(); }, [load]);
+  async function changeRole(target) {
+    const nextRole = target.role === 'admin' ? 'resident' : 'admin';
+    if (!window.confirm(`${nextRole === 'admin' ? 'Promote' : 'Revoke admin from'} ${target.name}?`)) return;
+    try { await apiClient.updateUserRole(target.id, nextRole); toast('User role updated.', 'success'); load(); } catch (err) { toast(err.message, 'error'); }
+  }
+  return <div><input type="search" placeholder="Search name, email or flat" value={search} onChange={(event) => setSearch(event.target.value)} />
+    <table><thead><tr><th>Name</th><th>Email</th><th>Flat</th><th>Role</th><th></th></tr></thead><tbody>{users.map((target) => <tr key={target.id}><td>{target.name}</td><td>{target.email}</td><td>{target.flat_number || '-'}</td><td>{target.role}</td><td><button className="btn btn-ghost btn-sm" disabled={target.id === user.id} onClick={() => changeRole(target)}>{target.role === 'admin' ? 'Revoke Admin' : 'Promote to Admin'}</button></td></tr>)}</tbody></table>
+  </div>;
 }
 
 /* ============================== Root App ============================== */
@@ -640,7 +704,7 @@ function AppInner() {
   useEffect(() => {
     // Validate any persisted token on load; drop it silently if stale/expired.
     if (sessionGetToken()) {
-      apiClient.me().then((r) => setUser(r.user)).catch(() => { clearSession(); setUser(null); });
+      apiClient.me().then((r) => setUser(r.user)).catch(() => { sessionClear(); setUser(null); });
     }
   }, []);
 

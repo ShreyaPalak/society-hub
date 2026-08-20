@@ -219,6 +219,12 @@ than a bare `npm start` README.
 | POST | `/api/notices` | admin | `is_important` triggers async email fanout |
 | GET/PUT | `/api/admin/settings/overdue-threshold` | admin | drives §3.2 |
 
+Versioned clients should use the equivalent `/api/v1/...` paths. Legacy `/api/...`
+paths remain available during the transition. Complaint creation and status changes
+also publish authenticated Socket.io events (`complaint:created` to `admin_room`
+and `complaint:updated` to the owning resident room). Admins can manage the user
+directory through `GET /api/v1/admin/users` and `PATCH /api/v1/admin/users/:id/role`.
+
 ## 5. What's intentionally out of scope
 Real SMTP credentials, file storage on S3/cloud (uploads are local disk,
 swap `middleware/upload.js`'s `diskStorage` for `multer-s3` in production),
